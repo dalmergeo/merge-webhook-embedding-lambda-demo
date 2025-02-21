@@ -2,4 +2,7 @@
 .idea
 .venv/
 
+lambda_deployment.zip
+
 __pycache__
+deployment_package/

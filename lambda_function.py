@@ -1,13 +1,12 @@
 import os
 import json
 import psycopg2
+import openai
 from merge import Merge
 from pgvector.psycopg2 import register_vector
-from sentence_transformers import SentenceTransformer
 
-# Load the embedding model at module load time for improved performance on warm invocations.
-# We're using the lightweight 'all-MiniLM-L6-v2' model here.
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Set OpenAI API key from environment variable.
+openai.api_key = os.environ["OPENAI_API_KEY"]
 
 def upsert_merge_file(cursor, data):
     """
@@ -51,7 +50,6 @@ def upsert_merge_file(cursor, data):
     )
     cursor.execute(upsert_query, file_values)
 
-
 def upsert_file_embedding(cursor, file_id, section, text, embedding):
     """
     Upserts an embedding record into the file_embeddings table.
@@ -64,19 +62,11 @@ def upsert_file_embedding(cursor, file_id, section, text, embedding):
         text_content = EXCLUDED.text_content,
         embedding = EXCLUDED.embedding;
     """
-    embedding_value = embedding.tolist() if hasattr(embedding, "tolist") else embedding
-    cursor.execute(upsert_query, (file_id, section, text, embedding_value))
-
-
+    cursor.execute(upsert_query, (file_id, section, text, embedding))
 
 def lambda_handler(event, context):
     """
     AWS Lambda handler to process a webhook from the Merge API.
-    This function:
-      1. Parses the incoming JSON payload.
-      2. Downloads a file (assumed to be plain text) using the Merge API.
-      3. Generates an embedding for the file's text content.
-      4. Inserts (or upserts) the file data and its embedding into PostgreSQL RDS tables.
     """
     # 1. Parse the incoming webhook JSON payload.
     try:
@@ -87,7 +77,6 @@ def lambda_handler(event, context):
             "body": json.dumps({"error": "Invalid JSON payload", "details": str(e)})
         }
 
-    # Extract the file identifier from the payload (adjust key names as needed).
     data = body.get("data", {})
     file_id = data.get("id")
     if not file_id:
@@ -106,16 +95,18 @@ def lambda_handler(event, context):
         mime_type="txt"
     )
 
-    # Extract the text content from the file chunks.
     text = ""
     for chunk in response:
         text += chunk.decode("utf-8")
 
-    # 3. Create an embedding for the text content using the sentence transformer model.
+    # 3. Create an embedding for the text using the OpenAI Embeddings API.
     try:
-        print(f"Creating embedding for text: {text}")
-        embedding = model.encode(text)
-        print(f"Embedding created: {embedding}")
+        openai_client = openai.Client()
+        response = openai_client.embeddings.create(
+            input=text,
+            model="text-embedding-3-small"
+        )
+        embedding = response.data[0].embedding
     except Exception as e:
         return {
             "statusCode": 500,
@@ -131,7 +122,6 @@ def lambda_handler(event, context):
             user=os.environ["DB_USER"],
             password=os.environ["DB_PASSWORD"]
         )
-        # Register the vector type adapter for pgvector.
         register_vector(connection)
     except Exception as e:
         return {
@@ -139,7 +129,7 @@ def lambda_handler(event, context):
             "body": json.dumps({"error": "Database connection failed", "details": str(e)})
         }
 
-    # 5. Upsert the file record and insert the embedding into their respective tables.
+    # 5. Upsert the file record and insert the embedding.
     try:
         with connection.cursor() as cursor:
             upsert_merge_file(cursor, data)
