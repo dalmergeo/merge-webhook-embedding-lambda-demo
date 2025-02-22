@@ -68,6 +68,9 @@ def lambda_handler(event, context):
     """
     AWS Lambda handler to process a webhook from the Merge API.
     """
+
+    print("Received event:", json.dumps(event))
+
     # 1. Parse the incoming webhook JSON payload.
     try:
         body = json.loads(event.get("body", "{}"))
@@ -85,19 +88,26 @@ def lambda_handler(event, context):
             "body": json.dumps({"error": "No 'id' field provided in the payload."})
         }
 
+    print(f"Processing file with ID: {file_id}")
+
     # 2. Create a Merge client and download the file.
     client = Merge(
         api_key=os.environ["MERGE_API_KEY"],
         account_token=os.environ["MERGE_ACCOUNT_TOKEN"]
     )
+    print("Downloading file content...")
     response = client.filestorage.files.download_retrieve(
         id=file_id,
         mime_type="txt"
     )
 
+    print("Extracting text content...")
+
     text = ""
     for chunk in response:
         text += chunk.decode("utf-8")
+
+    print(f"Text content: {text}")
 
     # 3. Create an embedding for the text using the OpenAI Embeddings API.
     try:
